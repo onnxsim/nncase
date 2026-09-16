@@ -61,6 +61,9 @@ using namespace nncase::ir::transforms::k210;
 using namespace nncase::targets;
 using namespace nncase::runtime;
 
+#ifndef __EMSCRIPTEN__ // patched locally: statically-linked WASM build registers this target
+                        // directly (src/cli/static_targets.cpp) instead of via dlopen, and two
+                        // targets' identically-named create_target() can't both be linked in
 extern "C"
 {
     K210_TARGET_API target *create_target()
@@ -68,6 +71,7 @@ extern "C"
         return new k210_target();
     }
 }
+#endif
 
 std::unique_ptr<codegen::module_builder> k210_target::create_module_builder(const module_type_t &type, std::string_view module_name, const codegen::module_builder_params &params)
 {

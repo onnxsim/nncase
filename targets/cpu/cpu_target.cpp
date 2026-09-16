@@ -32,6 +32,7 @@ using namespace nncase::targets;
 using namespace nncase::runtime;
 using namespace nncase::ir::transforms;
 
+#ifndef __EMSCRIPTEN__ // patched locally: see the matching guard in targets/k210/k210_target.cpp
 extern "C"
 {
     CPU_TARGET_API target *create_target()
@@ -39,6 +40,7 @@ extern "C"
         return new cpu_target();
     }
 }
+#endif
 
 void cpu_target::register_target_dependent_passes([[maybe_unused]] const module_type_t &type, ir::transforms::pass_manager &pass_mgr, [[maybe_unused]] bool use_ptq, [[maybe_unused]] bool split_w_to_act)
 {

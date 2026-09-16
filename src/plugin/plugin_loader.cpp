@@ -21,14 +21,31 @@
 #endif
 
 #include <fmt/format.h>
+#include <map>
 #include <nncase/plugin_loader.h>
 #include <nncase/targets/neutral_target.h>
+#include <string>
 
 using namespace nncase;
 using namespace nncase::plugin_loader;
 
 #define STR_(x) #x
 #define STR(x) STR_(x)
+
+namespace
+{
+// patched locally: see the register_static_target() comment in plugin_loader.h
+std::map<std::string, target_activator_t> &static_targets()
+{
+    static std::map<std::string, target_activator_t> registry;
+    return registry;
+}
+}
+
+void nncase::plugin_loader::register_static_target(std::string_view name, target_activator_t activator)
+{
+    static_targets()[std::string(name)] = activator;
+}
 
 namespace
 {
@@ -79,6 +96,11 @@ target_activator_t find_target_activator(std::string_view name)
 
 std::unique_ptr<target> plugin_loader::create_target(std::string_view name)
 {
+    auto &registry = static_targets();
+    auto it = registry.find(std::string(name));
+    if (it != registry.end())
+        return std::unique_ptr<target>(it->second());
+
     auto activator = find_target_activator(name);
     return std::unique_ptr<target>(activator());
 }
