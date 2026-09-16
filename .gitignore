@@ -277,6 +277,10 @@ build/
 out/
 out_2/
 tmp/
+
+# scripts/build-wasm.sh's own build + scratch directories (see that script)
+/build-wasm/
+/.wasm-build/
 tests/private
 *.exe
 .pytest_cache

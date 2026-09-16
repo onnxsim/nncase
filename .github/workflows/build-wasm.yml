@@ -1,0 +1,68 @@
+name: Build wasm32 ncc
+
+# Builds ncc (the K210/cpu-targeting ONNX -> kmodel compiler) for
+# wasm32-emscripten via scripts/build-wasm.sh, and -- only when triggered by
+# a tag matching nncase-wasm-v* -- publishes the result as a GitHub Release
+# on this fork. That tag prefix is deliberately not "v*": this fork also
+# carries upstream's own v1.9.0-style tags, and a release here is a build of
+# *this branch's* wasm-specific patches, not a new nncase version.
+#
+# A manual (workflow_dispatch) or PR-triggered run still does the full build
+# and uploads the same files as a short-lived build artifact, without
+# creating a release -- so a change to the build script itself gets
+# validated before anyone tags it.
+
+on:
+  push:
+    tags:
+      - "nncase-wasm-v*"
+  pull_request:
+    paths:
+      - "scripts/build-wasm.sh"
+      - "scripts/wasm/**"
+      - ".github/workflows/build-wasm.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write # only used by the release step, and only on a tag push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ncc for wasm32
+        run: bash scripts/build-wasm.sh
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build-wasm/bin/ncc.js build-wasm/bin/ncc.wasm LICENSE dist/
+          (cd dist && sha256sum ncc.js ncc.wasm > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nncase-wasm32-ncc
+          path: dist/
+          retention-days: 14
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ncc.js
+            dist/ncc.wasm
+            dist/SHA256SUMS
+          generate_release_notes: true
+          body: |
+            wasm32-emscripten build of `ncc` (K210 + cpu targets) from this fork's
+            `wasm-k210-build`-derived history at ${{ github.sha }}.
+
+            This is a Node.js-runnable CLI build (`node ncc.js compile -i onnx -t k210 ...`),
+            not yet a browser-embeddable API -- see `onnxsim/onnxsim`'s
+            `tools/onnx-k210-flash/README.md` for how it's meant to be consumed and
+            what's still missing for that.
