@@ -1,0 +1,4 @@
+gsl-lite 0.37.0 -- https://github.com/gsl-lite/gsl-lite (MIT)
+Vendored (headers + LICENSE only) for the wasm32 build (see ../../cmake/wasm-deps.cmake) --
+conancenter has no reachable source host for this in that build environment, but does host
+a prebuilt platform-independent (header-only) binary, which these files are a direct copy of.

@@ -1,0 +1,4 @@
+Lyra 1.5.0 -- https://github.com/bfgroup/Lyra (Boost Software License 1.0)
+Vendored (headers + LICENSE.txt only) for the wasm32 build (see ../../cmake/wasm-deps.cmake) --
+conancenter has no reachable source host for this in that build environment, but does host
+a prebuilt platform-independent (header-only) binary, which these files are a direct copy of.

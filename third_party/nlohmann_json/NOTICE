@@ -1,0 +1,4 @@
+JSON for Modern C++ 3.9.1 -- https://github.com/nlohmann/json (MIT)
+Vendored (headers + LICENSE.MIT only) for the wasm32 build (see ../../cmake/wasm-deps.cmake) --
+conancenter has no reachable source host for this in that build environment, but does host
+a prebuilt platform-independent (header-only) binary, which these files are a direct copy of.

@@ -1,0 +1,6 @@
+magic_enum 0.9.6 -- https://github.com/Neargye/magic_enum (MIT)
+Vendored (headers + LICENSE only) for the wasm32 build (see ../../cmake/wasm-deps.cmake) --
+conancenter has no reachable source host for this in that build environment, but does host
+a prebuilt platform-independent (header-only) binary, which these files are a direct copy of.
+0.9.6, not nncase's originally-pinned 0.7.0: see conanfile.py's own comment on that version
+bump (a real is_valid() SFINAE bug under newer Clang, unrelated to this vendoring).

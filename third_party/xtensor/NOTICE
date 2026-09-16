@@ -1,0 +1,4 @@
+xtensor 0.21.5 -- https://github.com/xtensor-stack/xtensor (BSD 3-Clause)
+Vendored (headers + LICENSE only) for the wasm32 build (see ../../cmake/wasm-deps.cmake) --
+conancenter has no reachable source host for this in that build environment, but does host
+a prebuilt platform-independent (header-only) binary, which these files are a direct copy of.
