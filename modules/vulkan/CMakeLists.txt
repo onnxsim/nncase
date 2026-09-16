@@ -48,12 +48,12 @@ if (BUILDING_RUNTIME)
         configure_file(${CMAKE_CURRENT_LIST_DIR}/cmake/nncase_rt_modules_vulkanConfig.cmake.in nncase_rt_modules_vulkanConfig.cmake @ONLY)
         install(FILES ${CMAKE_CURRENT_BINARY_DIR}/nncase_rt_modules_vulkanConfig.cmake DESTINATION lib/cmake/nncaseruntime)
     endif()
-else()
+elseif (ENABLE_VULKAN_COMPILER)  # patched locally: see the top-level CMakeLists.txt option comment
     add_subdirectory(src/codegen)
     add_subdirectory(src/transforms/vulkan)
-    
+
     set(SRCS src/dllmain.cpp)
-    
+
     add_library(nncase_modules_vulkan SHARED ${SRCS})
     target_include_directories(nncase_modules_vulkan PUBLIC include)
     target_link_libraries(nncase_modules_vulkan PRIVATE codegen_vulkan transforms_vulkan simulator_vulkan nncase)

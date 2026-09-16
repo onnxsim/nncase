@@ -31,6 +31,8 @@ project(nncase
 
 option(ENABLE_OPENMP "OpenMP support" ON)
 option(ENABLE_HALIDE "halide kernels support" ON)
+option(ENABLE_VULKAN_COMPILER "Enable Vulkan compiler target/codegen support" ON)  # patched locally: gates targets/vulkan + modules/vulkan's compiler-side codegen, whose only real deps (libzippp/inja/shaderc) are unused by the k210/cpu compiler path
+option(ENABLE_TFLITE_IMPORTER "Enable the TFLite (flatbuffers-based) model importer" ON)  # patched locally: gates src/importer/tflite and its only real dep, flatbuffers -- ONNX import (protobuf-based) and kmodel's own hand-rolled binary output never touch flatbuffers
 option(BUILD_PYTHON_BINDING "Build python binding" ON)
 option(BUILD_BENCHMARK "Build benchmark programs" ON)
 option(BUILD_TESTING "Build test programs" OFF)
@@ -239,7 +241,9 @@ else()
     # Targets
     add_subdirectory(targets/cpu)
     add_subdirectory(targets/k210)
-    add_subdirectory(targets/vulkan)
+    if (ENABLE_VULKAN_COMPILER)
+        add_subdirectory(targets/vulkan)
+    endif ()
 endif()
 
 # Modules

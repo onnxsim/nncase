@@ -22,7 +22,7 @@ if (BUILDING_RUNTIME)
         set_target_properties(runtime_vulkan PROPERTIES POSITION_INDEPENDENT_CODE ON)
         install(TARGETS runtime_vulkan EXPORT nncaseruntimeTargets)
     endif()
-else()
+elseif (ENABLE_VULKAN_COMPILER)  # patched locally: see the top-level CMakeLists.txt option comment
     add_library(simulator_vulkan OBJECT ${SRCS})
     target_compile_definitions(simulator_vulkan PRIVATE -DVULKAN_HPP_NO_EXCEPTIONS)
     target_link_libraries(simulator_vulkan PUBLIC nncase)

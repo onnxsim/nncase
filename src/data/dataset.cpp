@@ -14,13 +14,129 @@
  */
 #include <fstream>
 #include <nncase/data/dataset.h>
-#include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
 #include <string>
+
+// patched locally: replaces opencv (imgcodecs/imgproc, and transitively
+// libjpeg-turbo/libpng/jasper/zlib) with stb_image/stb_image_resize --
+// this file only ever decodes a compressed image to interleaved RGB8 and
+// box/bilinear-resizes it, both of which are exactly stb_image's job, at a
+// fraction of the dependency weight (two vendored single-header files
+// instead of a whole from-source OpenCV build).
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize.h"
 
 using namespace nncase;
 using namespace nncase::data;
+
+namespace
+{
+struct decoded_image
+{
+    std::vector<uint8_t> pixels; // interleaved RGB8, row-major
+    int width;
+    int height;
+};
+
+decoded_image decode_rgb(const std::vector<uint8_t> &src)
+{
+    int w, h, comp;
+    auto *data = stbi_load_from_memory(src.data(), (int)src.size(), &w, &h, &comp, 3);
+    if (!data)
+        throw std::runtime_error(std::string("Failed to decode image: ") + stbi_failure_reason());
+
+    decoded_image img { {}, w, h };
+    img.pixels.assign(data, data + (size_t)w * (size_t)h * 3);
+    stbi_image_free(data);
+    return img;
+}
+
+std::vector<uint8_t> resize_rgb(const decoded_image &img, int dst_w, int dst_h)
+{
+    std::vector<uint8_t> out((size_t)dst_w * (size_t)dst_h * 3);
+    if (!stbir_resize_uint8(img.pixels.data(), img.width, img.height, 0,
+            out.data(), dst_w, dst_h, 0, 3))
+        throw std::runtime_error("Failed to resize image");
+    return out;
+}
+
+// Writes a resized RGB8 image into dest as either NHWC or NCHW, converting
+// each channel with cvt(uint8_t). shape is the destination tensor shape
+// (batch dim excluded by the caller, as in the original opencv version).
+template <class T, class Cvt>
+void write_image(const std::vector<uint8_t> &rgb, int dst_w, int dst_h, T *dest,
+    const xt::dynamic_shape<size_t> &shape, const std::string &layout, Cvt cvt)
+{
+    if (layout == "NHWC")
+    {
+        auto channels = shape[3];
+        for (int y = 0; y < dst_h; y++)
+        {
+            for (int x = 0; x < dst_w; x++)
+            {
+                auto i = (size_t)y * dst_w + x;
+                auto *px = &rgb[i * 3];
+                if (channels == 3)
+                {
+                    dest[i * 3] = cvt(px[0]);
+                    dest[i * 3 + 1] = cvt(px[1]);
+                    dest[i * 3 + 2] = cvt(px[2]);
+                }
+                else if (channels == 1)
+                {
+                    dest[i] = cvt(px[0]);
+                }
+                else
+                {
+                    throw std::runtime_error("Unsupported image channels: " + std::to_string(channels));
+                }
+            }
+        }
+    }
+    else if (layout == "NCHW")
+    {
+        auto channels = shape[1];
+        size_t channel_size = (size_t)dst_w * dst_h;
+        for (int y = 0; y < dst_h; y++)
+        {
+            for (int x = 0; x < dst_w; x++)
+            {
+                auto i = (size_t)y * dst_w + x;
+                auto *px = &rgb[i * 3];
+                if (channels == 3)
+                {
+                    dest[i] = cvt(px[0]);
+                    dest[i + channel_size] = cvt(px[1]);
+                    dest[i + channel_size * 2] = cvt(px[2]);
+                }
+                else if (channels == 1)
+                {
+                    dest[i] = cvt(px[0]);
+                }
+                else
+                {
+                    throw std::runtime_error("Unsupported image channels: " + std::to_string(channels));
+                }
+            }
+        }
+    }
+    else
+    {
+        throw std::runtime_error("Unsupported layout type!");
+    }
+}
+
+std::pair<int, int> dest_size(const xt::dynamic_shape<size_t> &shape, const std::string &layout)
+{
+    // (width, height), matching the original code's cv::Size((int)shape[w_dim], (int)shape[h_dim])
+    if (layout == "NHWC")
+        return { (int)shape[2], (int)shape[1] };
+    else if (layout == "NCHW")
+        return { (int)shape[3], (int)shape[2] };
+    throw std::runtime_error("Unsupported layout type!");
+}
+}
 
 dataset::dataset(const std::filesystem::path &path, std::function<bool(const std::filesystem::path &)> file_filter, xt::dynamic_shape<size_t> input_shape, std::string input_layout)
     : input_shape_(std::move(input_shape)), input_layout_(input_layout)
@@ -48,213 +164,36 @@ dataset::dataset(const std::filesystem::path &path, std::function<bool(const std
 
 image_dataset::image_dataset(const std::filesystem::path &path, xt::dynamic_shape<size_t> input_shape, std::string input_layout)
     : dataset(
-        path, [](const std::filesystem::path &filename) { return cv::haveImageReader(filename.string()); },
+        path, [](const std::filesystem::path &filename) {
+            int w, h, comp;
+            return stbi_info(filename.string().c_str(), &w, &h, &comp) != 0;
+        },
         std::move(input_shape), input_layout)
 {
 }
 
 void image_dataset::process(const std::vector<uint8_t> &src, float *dest, const xt::dynamic_shape<size_t> &shape, std::string layout)
 {
-    auto img = cv::imdecode(src, cv::IMREAD_COLOR);
-
-    cv::Mat f_img;
-    if ((img.type() & CV_32F) == 0)
-        img.convertTo(f_img, CV_32F, 1.0 / 255.0);
-    else
-        img.convertTo(f_img, CV_32F);
-
-    cv::Mat dest_img;
-    if (layout == "NHWC")
-    {
-        cv::resize(f_img, dest_img, cv::Size((int)shape[2], (int)shape[1]));
-
-        if (shape[3] == 3)
-        {
-            dest_img.forEach<cv::Vec3f>([&](cv::Vec3f v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i * 3] = v[2];
-                dest[i * 3 + 1] = v[1];
-                dest[i * 3 + 2] = v[0];
-            });
-        }
-        else if (shape[3] == 1)
-        {
-            dest_img.forEach<cv::Vec3f>([&](cv::Vec3f v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i] = v[0];
-            });
-        }
-        else
-        {
-            throw std::runtime_error("Unsupported image channels: " + std::to_string(shape[0]));
-        }
-    }
-    else if (layout == "NCHW")
-    {
-        cv::resize(f_img, dest_img, cv::Size((int)shape[3], (int)shape[2]));
-
-        size_t channel_size = xt::compute_size(xt::dynamic_shape<size_t> { shape[2], shape[3] });
-        if (shape[1] == 3)
-        {
-            dest_img.forEach<cv::Vec3f>([&](cv::Vec3f v, const int *idx) {
-                auto i = idx[0] * shape[3] + idx[1];
-                dest[i] = v[2];
-                dest[i + channel_size] = v[1];
-                dest[i + channel_size * 2] = v[0];
-            });
-        }
-        else if (shape[1] == 1)
-        {
-            dest_img.forEach<cv::Vec3f>([&](cv::Vec3f v, const int *idx) {
-                auto i = idx[0] * shape[3] + idx[1];
-                dest[i] = v[0];
-            });
-        }
-        else
-        {
-            throw std::runtime_error("Unsupported image channels: " + std::to_string(shape[0]));
-        }
-    }
-    else
-    {
-        throw std::runtime_error("Unsupported layout type!");
-    }
+    auto img = decode_rgb(src);
+    auto [dst_w, dst_h] = dest_size(shape, layout);
+    auto resized = resize_rgb(img, dst_w, dst_h);
+    write_image(resized, dst_w, dst_h, dest, shape, layout, [](uint8_t v) { return v / 255.0f; });
 }
 
 void image_dataset::process(const std::vector<uint8_t> &src, uint8_t *dest, const xt::dynamic_shape<size_t> &shape, std::string layout)
 {
-    auto img = cv::imdecode(src, cv::IMREAD_COLOR);
-
-    cv::Mat f_img;
-    if ((img.type() & CV_8U) == 0)
-        img.convertTo(f_img, CV_8U);
-    else
-        img.convertTo(f_img, CV_8U);
-
-    cv::Mat dest_img;
-    if (layout == "NHWC")
-    {
-        cv::resize(f_img, dest_img, cv::Size((int)shape[2], (int)shape[1]));
-
-        if (shape[0] == 3)
-        {
-            dest_img.forEach<cv::Vec3b>([&](cv::Vec3b v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i * 3] = v[2];
-                dest[i * 3 + 1] = v[1];
-                dest[i * 3 + 2] = v[0];
-            });
-        }
-        else if (shape[0] == 1)
-        {
-            dest_img.forEach<cv::Vec3b>([&](cv::Vec3b v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i] = v[0];
-            });
-        }
-        else
-        {
-            throw std::runtime_error("Unsupported image channels: " + std::to_string(shape[0]));
-        }
-    }
-    else if (layout == "NCHW")
-    {
-        cv::resize(f_img, dest_img, cv::Size((int)shape[3], (int)shape[2]));
-
-        size_t channel_size = xt::compute_size(xt::dynamic_shape<size_t> { shape[2], shape[3] });
-        if (shape[1] == 3)
-        {
-            dest_img.forEach<cv::Vec3b>([&](cv::Vec3b v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i] = v[2];
-                dest[i + channel_size] = v[1];
-                dest[i + channel_size * 2] = v[0];
-            });
-        }
-        else if (shape[1] == 1)
-        {
-            dest_img.forEach<cv::Vec3b>([&](cv::Vec3b v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i] = v[0];
-            });
-        }
-        else
-        {
-            throw std::runtime_error("Unsupported image channels: " + std::to_string(shape[0]));
-        }
-    }
-    else
-    {
-        throw std::runtime_error("Unsupported layout type!");
-    }
+    auto img = decode_rgb(src);
+    auto [dst_w, dst_h] = dest_size(shape, layout);
+    auto resized = resize_rgb(img, dst_w, dst_h);
+    write_image(resized, dst_w, dst_h, dest, shape, layout, [](uint8_t v) { return v; });
 }
 
 void image_dataset::process(const std::vector<uint8_t> &src, int8_t *dest, const xt::dynamic_shape<size_t> &shape, std::string layout)
 {
-    auto img = cv::imdecode(src, cv::IMREAD_COLOR);
-
-    cv::Mat f_img;
-    if ((img.type() & CV_8S) == 0)
-        img.convertTo(f_img, CV_8S);
-    else
-        img.convertTo(f_img, CV_8S);
-
-    cv::Mat dest_img;
-    if (layout == "NHWC")
-    {
-        cv::resize(f_img, dest_img, cv::Size((int)shape[2], (int)shape[1]));
-
-        if (shape[0] == 3)
-        {
-            dest_img.forEach<cv::Vec3b>([&](cv::Vec3b v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i * 3] = v[2];
-                dest[i * 3 + 1] = v[1];
-                dest[i * 3 + 2] = v[0];
-            });
-        }
-        else if (shape[0] == 1)
-        {
-            dest_img.forEach<cv::Vec3b>([&](cv::Vec3b v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i] = v[0];
-            });
-        }
-        else
-        {
-            throw std::runtime_error("Unsupported image channels: " + std::to_string(shape[0]));
-        }
-    }
-    else if (layout == "NCHW")
-    {
-        cv::resize(f_img, dest_img, cv::Size((int)shape[3], (int)shape[2]));
-
-        size_t channel_size = xt::compute_size(xt::dynamic_shape<size_t> { shape[2], shape[3] });
-        if (shape[1] == 3)
-        {
-            dest_img.forEach<cv::Vec3b>([&](cv::Vec3b v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i] = v[2];
-                dest[i + channel_size] = v[1];
-                dest[i + channel_size * 2] = v[0];
-            });
-        }
-        else if (shape[1] == 1)
-        {
-            dest_img.forEach<cv::Vec3b>([&](cv::Vec3b v, const int *idx) {
-                auto i = idx[0] * shape[2] + idx[1];
-                dest[i] = v[0];
-            });
-        }
-        else
-        {
-            throw std::runtime_error("Unsupported image channels: " + std::to_string(shape[0]));
-        }
-    }
-    else
-    {
-        throw std::runtime_error("Unsupported layout type!");
-    }
+    auto img = decode_rgb(src);
+    auto [dst_w, dst_h] = dest_size(shape, layout);
+    auto resized = resize_rgb(img, dst_w, dst_h);
+    write_image(resized, dst_w, dst_h, dest, shape, layout, [](uint8_t v) { return (int8_t)v; });
 }
 
 raw_dataset::raw_dataset(const std::filesystem::path &path, xt::dynamic_shape<size_t> input_shape)

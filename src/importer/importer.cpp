@@ -14,17 +14,29 @@
  */
 #include "caffe/caffe_importer.h"
 #include "onnx/onnx_importer.h"
+#ifdef NNCASE_ENABLE_TFLITE_IMPORTER
 #include "tflite/tflite_importer.h"
+#endif
 #include <nncase/importer/importer.h>
+#include <stdexcept>
 
 using namespace nncase;
 using namespace nncase::importer;
 using namespace nncase::ir;
 
+// patched locally: TFLite import (flatbuffers-based) is optional -- see the
+// ENABLE_TFLITE_IMPORTER option comment in the top-level CMakeLists.txt
+#ifdef NNCASE_ENABLE_TFLITE_IMPORTER
 void nncase::importer::import_tflite(ir::graph &graph, std::span<const uint8_t> model, const import_options &options, std::string &real_inlayout, std::string &real_outlayout)
 {
     tflite_importer(model, graph).import(options, real_inlayout, real_outlayout);
 }
+#else
+void nncase::importer::import_tflite(ir::graph &, std::span<const uint8_t>, const import_options &, std::string &, std::string &)
+{
+    throw std::runtime_error("TFLite import is disabled in this build (ENABLE_TFLITE_IMPORTER=OFF)");
+}
+#endif
 
 void nncase::importer::import_onnx(ir::graph &graph, std::span<const uint8_t> model, const import_options &options, std::string &real_inlayout, std::string &real_outlayout)
 {
