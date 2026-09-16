@@ -333,3 +333,122 @@ void onnx_importer::convert_op_Acosh(const onnx::NodeProto &node)
     input_tensors_.emplace(&add->input_a(), input);
     output_tensors_.emplace(output, &log->output());
 }
+
+// Tan(x) = Sin(x) / Cos(x)
+void onnx_importer::convert_op_Tan(const onnx::NodeProto &node)
+{
+    assert(node.input().size() == 1);
+    assert(node.output().size() == 1);
+
+    const auto &op_name { generate_name(node) };
+    const auto &input = node.input()[0];
+    const auto &output = node.output()[0];
+    const auto &in_shape = get_shape(input);
+    const auto input_type = get_datatype(input).value();
+
+    auto sin = graph_.emplace<unary>(unary_sin, in_shape);
+    sin->name(op_name + ".sin(Tan)");
+
+    auto cos = graph_.emplace<unary>(unary_cos, in_shape);
+    cos->name(op_name + ".cos(Tan)");
+
+    auto div = graph_.emplace<binary>(binary_div, input_type, sin->output().shape(), cos->output().shape(), value_range<float>::full());
+    div->name(op_name + ".div(Tan)");
+
+    div->input_a().connect(sin->output());
+    div->input_b().connect(cos->output());
+
+    input_tensors_.emplace(&sin->input(), input);
+    input_tensors_.emplace(&cos->input(), input);
+    output_tensors_.emplace(output, &div->output());
+}
+
+// Atan(x) = Asin(x / sqrt(1 + x^2))
+void onnx_importer::convert_op_Atan(const onnx::NodeProto &node)
+{
+    assert(node.input().size() == 1);
+    assert(node.output().size() == 1);
+
+    const auto &op_name { generate_name(node) };
+    const auto &input = node.input()[0];
+    const auto &output = node.output()[0];
+    const auto &in_shape = get_shape(input);
+    const auto input_type = get_datatype(input).value();
+
+    auto square = graph_.emplace<unary>(unary_square, in_shape);
+    square->name(op_name + ".square(Atan)");
+
+    auto one = graph_.emplace<constant>(1.f);
+    one->name(op_name + ".one(Atan)");
+
+    auto add = graph_.emplace<binary>(binary_add, input_type, square->output().shape(), one->output().shape(), value_range<float>::nonnegative());
+    add->name(op_name + ".add(Atan)");
+
+    auto sqrt = graph_.emplace<unary>(unary_sqrt, add->output().shape());
+    sqrt->name(op_name + ".sqrt(Atan)");
+
+    auto div = graph_.emplace<binary>(binary_div, input_type, in_shape, sqrt->output().shape(), value_range<float>::full());
+    div->name(op_name + ".div(Atan)");
+
+    auto asin = graph_.emplace<unary>(unary_asin, div->output().shape());
+    asin->name(op_name + ".asin(Atan)");
+
+    add->input_a().connect(square->output());
+    add->input_b().connect(one->output());
+    sqrt->input().connect(add->output());
+    div->input_b().connect(sqrt->output());
+    asin->input().connect(div->output());
+
+    input_tensors_.emplace(&square->input(), input);
+    input_tensors_.emplace(&div->input_a(), input);
+    output_tensors_.emplace(output, &asin->output());
+}
+
+// Atanh(x) = 0.5 * ln((1 + x) / (1 - x))
+void onnx_importer::convert_op_Atanh(const onnx::NodeProto &node)
+{
+    assert(node.input().size() == 1);
+    assert(node.output().size() == 1);
+
+    const auto &op_name { generate_name(node) };
+    const auto &input = node.input()[0];
+    const auto &output = node.output()[0];
+    const auto &in_shape = get_shape(input);
+    const auto input_type = get_datatype(input).value();
+
+    auto one_a = graph_.emplace<constant>(1.f);
+    one_a->name(op_name + ".one_a(Atanh)");
+
+    auto one_b = graph_.emplace<constant>(1.f);
+    one_b->name(op_name + ".one_b(Atanh)");
+
+    auto add = graph_.emplace<binary>(binary_add, input_type, one_a->output().shape(), in_shape, value_range<float>::full());
+    add->name(op_name + ".add(Atanh)");
+
+    auto sub = graph_.emplace<binary>(binary_sub, input_type, one_b->output().shape(), in_shape, value_range<float>::full());
+    sub->name(op_name + ".sub(Atanh)");
+
+    auto div = graph_.emplace<binary>(binary_div, input_type, add->output().shape(), sub->output().shape(), value_range<float>::full());
+    div->name(op_name + ".div(Atanh)");
+
+    auto log = graph_.emplace<unary>(unary_log, div->output().shape());
+    log->name(op_name + ".log(Atanh)");
+
+    auto two = graph_.emplace<constant>(2.f);
+    two->name(op_name + ".two(Atanh)");
+
+    auto div2 = graph_.emplace<binary>(binary_div, input_type, log->output().shape(), two->output().shape(), value_range<float>::full());
+    div2->name(op_name + ".div2(Atanh)");
+
+    add->input_a().connect(one_a->output());
+    sub->input_a().connect(one_b->output());
+    div->input_a().connect(add->output());
+    div->input_b().connect(sub->output());
+    log->input().connect(div->output());
+    div2->input_a().connect(log->output());
+    div2->input_b().connect(two->output());
+
+    input_tensors_.emplace(&add->input_b(), input);
+    input_tensors_.emplace(&sub->input_b(), input);
+    output_tensors_.emplace(output, &div2->output());
+}

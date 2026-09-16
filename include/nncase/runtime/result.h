@@ -15,7 +15,16 @@
 #pragma once
 #include "compiler_defs.h"
 #include <functional>
-#include <mpark/variant.hpp>
+// patched locally: xtl/xvariant.hpp embeds its own private copy of mpark::variant
+// (deliberately using separate header guards -- see that file's own comment) and
+// defines it directly in namespace mpark, same as the standalone mpark-variant
+// package below would. Any translation unit that also reaches xtensor's
+// xstrided_view.hpp/xdynamic_view.hpp (both unconditionally include
+// <xtl/xvariant.hpp>) ends up with both copies at once, which is a hard
+// redefinition error, not just an ODR footnote. Including xtl's copy here
+// instead of the standalone package avoids the double-definition without
+// touching any of the mpark::-qualified usages below.
+#include <xtl/xvariant.hpp>
 #include <system_error>
 #include <type_traits>
 
