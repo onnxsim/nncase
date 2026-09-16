@@ -67,7 +67,10 @@ class nncaseConan(ConanFile):
             # drops opencv's own from-source dependency chain (libjpeg-turbo/libpng/jasper)
             self.requires('protobuf/3.17.1')
             self.requires('xtensor/0.21.5')
-            self.requires('spdlog/1.8.2')
+            # patched locally: spdlog dropped -- verified zero usages under src/include/modules/targets
+            # (no #include <spdlog/...>, no spdlog:: reference in any target_link_libraries, and its
+            # compiled library never appears on any final link line either -- only its compile
+            # definitions/include dirs leaked in via conan_basic_setup()'s global (non-TARGETS) mode).
             # patched locally: zlib dropped -- verified zero direct usages under src/include/modules/targets;
             # it was an unused direct requirement (dependencies.cmake never calls find_package(ZLIB) either)
             if self.options.vulkan_compiler:  # patched locally: see the vulkan_compiler option comment above

@@ -23,7 +23,13 @@
 // <xtl/xvariant.hpp>) ends up with both copies at once, which is a hard
 // redefinition error, not just an ODR footnote. Including xtl's copy here
 // instead of the standalone package avoids the double-definition without
-// touching any of the mpark::-qualified usages below.
+// touching any of the mpark::-qualified usages below. Every CMake target that
+// links mpark_variant::mpark_variant now also needs xtl::xtl for exactly this
+// reason -- a conan build with conan_basic_setup()'s legacy global include
+// mode papers over the missing edge (every dependency's headers are on every
+// target's include path regardless of what it declares), so this only
+// surfaces as a real build failure under a stricter, target-scoped
+// dependency setup (see cmake/wasm-deps.cmake).
 #include <xtl/xvariant.hpp>
 #include <system_error>
 #include <type_traits>

@@ -7,17 +7,26 @@
 # how this gets run and published; this script has no CI-specific logic of
 # its own so it also just works as a local rebuild.
 #
-# Three real, evidence-checked build gaps this works around -- see
-# scripts/wasm/patch_conan.py's own docstring for the conan/source-fetching
-# ones, this comment covers the rest:
+# No conan: by the time opencv/flatbuffers/spdlog/zlib/libzippp/inja/shaderc
+# are all gone (see this branch's earlier commits), what's left is seven
+# header-only libraries (vendored directly under third_party/, see
+# cmake/wasm-deps.cmake) plus fmt and protobuf, which this script builds
+# itself with plain emcmake + ninja + `cmake --install` into
+# NNCASE_WASM_DEPS_PREFIX. Nearly every real problem hit getting this build
+# working the first time was conan 1.x's own machinery (the sunnycase
+# remote's broken search endpoint, settings.yml's compiler-version enum, the
+# two-profile cross-compilation dance, a local HTTP server to substitute
+# source tarballs) rather than the dependencies themselves -- once the
+# dependency graph is this small, going straight to each project's own
+# upstream CMakeLists.txt is both less code and less fragile.
 #
+# Two other real gaps this still works around, neither conan-specific:
 # - protoc, run at build time to generate C++ from third_party/onnx/onnx.proto,
 #   must be a *native* binary (it runs during the build, on the build
-#   machine) even though libprotobuf itself is cross-compiled for wasm32 --
-#   conan would otherwise hand CMake a wasm32 protoc that can't execute
-#   outside a WASM runtime. `apt install protobuf-compiler` gives a native
-#   one at the exact same version (3.21.12) substituted in as protobuf's
-#   source below, so generated-code conventions match exactly.
+#   machine) even though libprotobuf itself is cross-compiled for wasm32.
+#   `apt install protobuf-compiler` gives a native one at the exact same
+#   version (3.21.12) substituted in as protobuf's source below, so
+#   generated-code conventions match exactly.
 # - Emscripten builds static-only by default (no real ELF-style shared
 #   objects), which this branch's own commits already adapt nncase's
 #   target-plugin loading for (see "Register k210/cpu targets statically").
@@ -27,8 +36,8 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." &>/dev/null && pwd)
 WORK_DIR=$(mkdir -p "${WASM_BUILD_WORK_DIR:-$REPO_ROOT/.wasm-build}" && cd "${WASM_BUILD_WORK_DIR:-$REPO_ROOT/.wasm-build}" && pwd)
 BUILD_DIR="$REPO_ROOT/build-wasm"
+DEPS_PREFIX="$WORK_DIR/deps-prefix"
 EMSCRIPTEN_VERSION=${EMSCRIPTEN_VERSION:-5.0.0}
-HTTP_PORT=${WASM_BUILD_HTTP_PORT:-8931}
 
 SUDO=""
 if [ "$(id -u)" != "0" ]; then
@@ -44,26 +53,7 @@ fi
 # shellcheck disable=SC1091
 source "$WORK_DIR/emsdk/emsdk_env.sh"
 
-# `em++ --version`'s "5.0.0" etc. is Emscripten's own release version, not
-# clang's -- `-v` additionally prints the real "clang version X.Y.Z" line.
-CLANG_VERSION=$(em++ -v 2>&1 | grep -oE '^clang version [0-9]+' | grep -oE '[0-9]+$')
-if [ -z "$CLANG_VERSION" ]; then
-    echo "could not detect emscripten's bundled clang version from 'em++ -v'" >&2
-    exit 1
-fi
-echo "emscripten's bundled clang major version: $CLANG_VERSION"
-
-echo "== conan (isolated venv) =="
-if [ ! -d "$WORK_DIR/conan-venv" ]; then
-    python3 -m venv "$WORK_DIR/conan-venv"
-fi
-# shellcheck disable=SC1091
-source "$WORK_DIR/conan-venv/bin/activate"
-pip install --quiet "conan==1.66.0" "pyyaml"
-CONAN_HOME=$(conan config home)
-
-echo "== apt sources: native protoc + fmt/protobuf/spdlog upstream tarballs =="
-# deb-src isn't enabled by default on Ubuntu's newer deb822-format sources list.
+echo "== apt sources: native protoc + fmt/protobuf upstream tarballs =="
 if ! apt-cache policy 2>/dev/null | grep -q deb-src; then
     $SUDO sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
     $SUDO apt-get update -qq
@@ -74,41 +64,51 @@ echo "native protoc: $PROTOC ($("$PROTOC" --version))"
 
 APT_SRC_DIR="$WORK_DIR/apt-src"
 mkdir -p "$APT_SRC_DIR"
-(cd "$APT_SRC_DIR" && apt-get source --download-only fmtlib protobuf spdlog)
+(cd "$APT_SRC_DIR" && apt-get source --download-only fmtlib protobuf)
 
-echo "== patching conan for a wasm32 compiler build =="
-for ref in "fmt/7.1.3@" "protobuf/3.17.1@" "spdlog/1.8.2@"; do
-    conan download "$ref" -r conancenter --recipe
-done
-python3 "$SCRIPT_DIR/wasm/patch_conan.py" \
-    --conan-home "$CONAN_HOME" \
-    --clang-version "$CLANG_VERSION" \
-    --apt-src-dir "$APT_SRC_DIR" \
-    --http-port "$HTTP_PORT" \
-    --spdlog-tarball-out "$WORK_DIR/spdlog-patched.tar.xz"
+extract_one() {
+    # extract_one <glob-pattern> <dest-dir> -- apt source tarballs unpack to
+    # a single top-level directory already named <name>-<version>.
+    local pattern="$1" dest="$2"
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    local tarball
+    tarball=$(compgen -G "$APT_SRC_DIR/$pattern" | head -1)
+    tar xf "$tarball" -C "$dest" --strip-components=1
+}
 
-echo "== serving apt sources on 127.0.0.1:$HTTP_PORT =="
-python3 -m http.server "$HTTP_PORT" --bind 127.0.0.1 --directory "$APT_SRC_DIR" &
-HTTP_SERVER_PID=$!
-trap 'kill "$HTTP_SERVER_PID" 2>/dev/null || true' EXIT
-sleep 1
+mkdir -p "$DEPS_PREFIX"
 
-PROFILE="$WORK_DIR/emscripten.profile"
-sed "s/@CLANG_VERSION@/$CLANG_VERSION/" "$SCRIPT_DIR/wasm/emscripten.profile" > "$PROFILE"
+echo "== fmt =="
+FMT_SRC="$WORK_DIR/fmt-src"
+FMT_BUILD="$WORK_DIR/fmt-build"
+extract_one 'fmtlib_*.orig.tar*' "$FMT_SRC"
+rm -rf "$FMT_BUILD"
+emcmake cmake -S "$FMT_SRC" -B "$FMT_BUILD" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DBUILD_SHARED_LIBS=OFF -DFMT_DOC=OFF -DFMT_TEST=OFF -DFMT_INSTALL=ON -DFMT_OS=ON \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX"
+ninja -C "$FMT_BUILD"
+cmake --install "$FMT_BUILD"
 
-echo "== conan install =="
+echo "== protobuf (native protoc already installed above; this build is libprotobuf/libprotoc only) =="
+PROTOBUF_SRC="$WORK_DIR/protobuf-src"
+PROTOBUF_BUILD="$WORK_DIR/protobuf-build"
+extract_one 'protobuf_*.orig.tar*' "$PROTOBUF_SRC"
+rm -rf "$PROTOBUF_BUILD"
+emcmake cmake -S "$PROTOBUF_SRC" -B "$PROTOBUF_BUILD" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DBUILD_SHARED_LIBS=OFF -Dprotobuf_WITH_ZLIB=OFF -Dprotobuf_BUILD_TESTS=OFF \
+    -Dprotobuf_BUILD_PROTOC_BINARIES=ON -Dprotobuf_DISABLE_RTTI=OFF \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX"
+ninja -C "$PROTOBUF_BUILD"
+cmake --install "$PROTOBUF_BUILD"
+
+echo "== configure nncase =="
 mkdir -p "$BUILD_DIR"
-conan install "$REPO_ROOT" \
-    -pr:b default -pr:h "$PROFILE" \
-    -o runtime=False -o tests=False -o halide=False -o python=False \
-    -o vulkan_runtime=False -o vulkan_compiler=False -o tflite_importer=False -o openmp=False \
-    --build=missing \
-    --install-folder "$BUILD_DIR"
-
-echo "== configure =="
-cd "$BUILD_DIR"
 emcmake cmake \
-    -DCONAN_EXPORTED=1 \
+    -DNNCASE_NO_CONAN=ON \
+    -DNNCASE_WASM_DEPS_PREFIX="$DEPS_PREFIX" \
     -DBUILDING_RUNTIME=OFF \
     -DENABLE_OPENMP=OFF \
     -DENABLE_HALIDE=OFF \
@@ -118,9 +118,11 @@ emcmake cmake \
     -DBUILD_TESTING=OFF \
     -DBUILD_BENCHMARK=OFF \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_STANDARD=20 \
     -DProtobuf_PROTOC_EXECUTABLE="$PROTOC" \
     -DCMAKE_EXE_LINKER_FLAGS="-sNO_DISABLE_EXCEPTION_CATCHING -sNODERAWFS=1" \
-    "$REPO_ROOT"
+    -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$BUILD_DIR/bin" \
+    -S "$REPO_ROOT" -B "$BUILD_DIR"
 
 echo "== build =="
 ninja -C "$BUILD_DIR" ncc

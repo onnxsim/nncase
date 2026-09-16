@@ -23,7 +23,7 @@ if (NOT BUILDING_RUNTIME)
     # stb_image/stb_image_resize instead (see that file's own comment)
     find_package(Protobuf REQUIRED)
     find_package(xtensor REQUIRED)
-    find_package(spdlog REQUIRED)
+    # patched locally: spdlog dropped -- see conanfile.py's matching comment
     if (ENABLE_VULKAN_COMPILER)  # patched locally: see the top-level CMakeLists.txt option comment -- these three (and libzip, transitively via libzippp) are only used by modules/vulkan/src/codegen/templates
         find_package(libzip REQUIRED)
         if(NOT CONAN_EXPORTED)

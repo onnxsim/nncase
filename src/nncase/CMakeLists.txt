@@ -8,7 +8,7 @@ target_link_libraries(nncase PRIVATE data ir kernels evaluator importer schedule
 if (ENABLE_TFLITE_IMPORTER)  # patched locally: see the top-level CMakeLists.txt option comment
     target_link_libraries(nncase PRIVATE tflite_importer)
 endif ()
-target_link_libraries(nncase PUBLIC gsl::gsl-lite xtensor::xtensor mpark_variant::mpark_variant)
+target_link_libraries(nncase PUBLIC gsl::gsl-lite xtensor::xtensor mpark_variant::mpark_variant xtl::xtl)
 target_compile_definitions(nncase PRIVATE -DNNCASE_DLL)
 target_compile_definitions(nncase PUBLIC -DNNCASE_SHARED_LIBS)
 target_link_libraries(nncase PRIVATE magic_enum::magic_enum fmt::fmt)

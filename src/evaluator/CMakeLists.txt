@@ -6,5 +6,5 @@ set(SRCS evaluator.cpp
          ops/neutral/neutral_ops.cpp)
 
 add_library(evaluator OBJECT ${SRCS})
-target_link_libraries(evaluator PUBLIC ir schedule simulator kernels mpark_variant::mpark_variant)
+target_link_libraries(evaluator PUBLIC ir schedule simulator kernels mpark_variant::mpark_variant xtl::xtl)
 set_property(TARGET evaluator PROPERTY POSITION_INDEPENDENT_CODE ON)

@@ -48,30 +48,36 @@ if (BUILDING_RUNTIME)
     option(DEFAULT_SHARED_RUNTIME_TENSOR_PLATFORM_IMPL "Use default shared memory platform impl" ON)
 endif()
 
-include(cmake/configure-conan.cmake)
-include(cmake/conan.cmake)
+option(NNCASE_NO_CONAN "Resolve dependencies from cmake/wasm-deps.cmake instead of conan (see that file's own comment)" OFF)
 
-if(NOT CONAN_EXPORTED)
-    conan_check()
-    conan_add_remote(NAME sunnycase URL https://conan.sunnycase.moe INDEX 0)
+if (NNCASE_NO_CONAN)
+    include(cmake/wasm-deps.cmake)
+else()
+    include(cmake/configure-conan.cmake)
+    include(cmake/conan.cmake)
+
+    if(NOT CONAN_EXPORTED)
+        conan_check()
+        conan_add_remote(NAME sunnycase URL https://conan.sunnycase.moe INDEX 0)
+    endif()
+
+    if(CONAN_EXPORTED) # in conan local cache
+        message(STATUS "Standard Conan Installation")
+        include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
+        conan_basic_setup() # NOTE need manmul set cppstd in conanfile.py
+    else() # in user space
+        message(STATUS "Auto Cmake Conan Installation")
+        include(${CMAKE_SOURCE_DIR}/cmake/conan.cmake)
+        conan_cmake_run(CONANFILE conanfile.py
+                        BASIC_SETUP
+                        OPTIONS ${CONAN_OPTS}
+                        SETTINGS ${CONAN_SETTINGS}
+                        BUILD missing)
+    endif()
+
+    include(${CMAKE_BINARY_DIR}/conan_paths.cmake)
+    include(cmake/dependencies.cmake)
 endif()
-
-if(CONAN_EXPORTED) # in conan local cache
-    message(STATUS "Standard Conan Installation")
-    include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
-    conan_basic_setup() # NOTE need manmul set cppstd in conanfile.py
-else() # in user space
-    message(STATUS "Auto Cmake Conan Installation")
-    include(${CMAKE_SOURCE_DIR}/cmake/conan.cmake)
-    conan_cmake_run(CONANFILE conanfile.py
-                    BASIC_SETUP
-                    OPTIONS ${CONAN_OPTS}
-                    SETTINGS ${CONAN_SETTINGS}
-                    BUILD missing)
-endif()
-
-include(${CMAKE_BINARY_DIR}/conan_paths.cmake)
-include(cmake/dependencies.cmake)
 
 if (BUILDING_RUNTIME)
     set(NNCASE_MAIN_INCLUDE_DIR ${CMAKE_CURRENT_LIST_DIR}/include)
